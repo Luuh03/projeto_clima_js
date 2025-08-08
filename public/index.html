@@ -1,20 +1,55 @@
 <!doctype html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clima - Script simples (Open-Meteo)</title>
   <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    body { margin: 2rem; }
-    h1 { font-weight: 600; font-size: 1.25rem; }
-    form { display: flex; gap: .5rem; max-width: 560px; margin-top: 1rem; }
-    input { flex: 1; padding: .6rem .8rem; font-size: 1rem; }
-    button { padding: .6rem .9rem; font-size: 1rem; cursor: pointer; }
-    #output { margin-top: 1rem; font-size: 1.1rem; }
-    .muted { color: #666; font-size: .95rem; }
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    body {
+      margin: 2rem;
+    }
+
+    h1 {
+      font-weight: 600;
+      font-size: 1.25rem;
+    }
+
+    form {
+      display: flex;
+      gap: .5rem;
+      max-width: 560px;
+      margin-top: 1rem;
+    }
+
+    input {
+      flex: 1;
+      padding: .6rem .8rem;
+      font-size: 1rem;
+    }
+
+    button {
+      padding: .6rem .9rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    #output {
+      margin-top: 1rem;
+      font-size: 1.1rem;
+    }
+
+    .muted {
+      color: #666;
+      font-size: .95rem;
+    }
   </style>
 </head>
+
 <body>
   <h1>Temperatura por cidade (Open‑Meteo)</h1>
   <p class="muted">Digite uma cidade e veja a temperatura atual. Também é impresso no console do navegador.</p>
@@ -27,9 +62,124 @@
   <div id="output" role="status"></div>
 
   <script>
+    // Seletores de elementos
     const form = document.getElementById('search-form');
     const input = document.getElementById('city-input');
     const output = document.getElementById('output');
+    const submitBtn = form.querySelector('button[type="submit"]');
+
+    // Melhora acessibilidade: atualizações de status anunciadas por leitores de tela
+    output.setAttribute('aria-live', 'polite');
+    output.setAttribute('aria-atomic', 'true');
+
+    // Endpoints base
+    const GEO_BASE = 'https://geocoding-api.open-meteo.com/v1/search';
+    const WEATHER_BASE = 'https://api.open-meteo.com/v1/forecast';
+
+    // Formatação de temperatura
+    const tempFormat = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
+
+    // Identificador para evitar que respostas antigas sobrescrevam a UI
+    let activeRequestId = 0;
+
+    // Erros especializados para melhorar tratamento e mensagens
+    class HttpError extends Error {
+      constructor(status, url) {
+        super(`HTTP ${status} em ${url}`);
+        this.name = 'HttpError';
+        this.status = status;
+      }
+    }
+    class UserVisibleError extends Error {
+      constructor(message) {
+        super(message);
+        this.name = 'UserVisibleError';
+      }
+    }
+
+    /**
+     * Busca um recurso JSON via fetch com suporte a timeout e tratamento explícito de erros HTTP.
+     *
+     * Comportamento:
+     * - Aborta a requisição após `timeoutMs` usando AbortController.
+     * - Lança HttpError quando a resposta HTTP não estiver OK (status 4xx/5xx).
+     * - Propaga AbortError quando o timeout expira.
+     * - Retorna o corpo já parseado como JSON.
+     *
+     * @param {string|URL} url - URL do recurso a ser buscado. Pode ser string ou instância de URL.
+     * @param {Object} [options] - Opções adicionais.
+     * @param {number} [options.timeoutMs=10000] - Tempo máximo (ms) antes de abortar a requisição.
+     * @returns {Promise<any>} Promessa que resolve para o JSON retornado pela API.
+     *
+     * @throws {HttpError} Quando a resposta HTTP não for OK (status 4xx/5xx).
+     * @throws {DOMException} AbortError quando a requisição é abortada por timeout.
+     * @throws {TypeError} Em erros de rede/CORS ou quando o fetch não puder iniciar.
+     *
+     * @example
+     * // Exemplo: buscar coordenadas de "São Paulo" com timeout de 8s
+     * try {
+     *   const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+     *   url.searchParams.set('name', 'São Paulo');
+     *   url.searchParams.set('count', '1');
+     *   url.searchParams.set('language', 'pt');
+     *   url.searchParams.set('format', 'json');
+     *
+     *   const data = await fetchJsonWithTimeout(url, { timeoutMs: 8000 });
+     *   const primeiroResultado = data?.results?.[0];
+     *   console.log('Resultado:', primeiroResultado);
+     * } catch (err) {
+     *   if (err.name === 'AbortError') {
+     *     console.warn('Tempo de resposta excedido.');
+     *   } else if (err instanceof HttpError) {
+     *     console.error('Falha HTTP:', err.status);
+     *   } else {
+     *     console.error('Erro ao buscar JSON:', err);
+     *   }
+     * }
+     */
+    async function fetchJsonWithTimeout(url, { timeoutMs = 10000 } = {}) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) {
+          throw new HttpError(res.status, new URL(url, location.href).toString());
+        }
+        return await res.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // Helpers: construção de URLs com parâmetros
+    function buildGeoUrl(city) {
+      const url = new URL(GEO_BASE);
+      url.searchParams.set('name', city);
+      url.searchParams.set('count', '1');     // melhor resultado
+      url.searchParams.set('language', 'pt'); // português quando disponível
+      url.searchParams.set('format', 'json');
+      return url;
+    }
+
+    function buildWeatherUrl({ latitude, longitude }) {
+      const url = new URL(WEATHER_BASE);
+      url.searchParams.set('latitude', String(latitude));
+      url.searchParams.set('longitude', String(longitude));
+      url.searchParams.set('current_weather', 'true');
+      url.searchParams.set('temperature_unit', 'celsius'); // garante °C
+      url.searchParams.set('timezone', 'auto');
+      return url;
+    }
+
+    // Helpers de UI
+    function setLoading(loading) {
+      submitBtn.disabled = loading;
+      form.setAttribute('aria-busy', String(loading));
+      if (loading) output.textContent = 'Buscando...';
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -39,54 +189,62 @@
         return;
       }
 
-      output.textContent = 'Buscando...';
+      const requestId = ++activeRequestId;
+      setLoading(true);
+
+      const safeUpdate = (text) => {
+        // Evita que uma resposta antiga sobrescreva a UI após nova submissão
+        if (requestId === activeRequestId) {
+          output.textContent = text;
+        }
+      };
 
       try {
-        // 1) Geocoding: obter latitude/longitude a partir do nome da cidade
-        const geoUrl = new URL('https://geocoding-api.open-meteo.com/v1/search');
-        geoUrl.searchParams.set('name', city);
-        geoUrl.searchParams.set('count', '1');
-        geoUrl.searchParams.set('language', 'pt');
-        geoUrl.searchParams.set('format', 'json');
+        // 1) Geocoding
+        const geoUrl = buildGeoUrl(city);
+        const geoData = await fetchJsonWithTimeout(geoUrl);
 
-        const geoRes = await fetch(geoUrl);
-        if (!geoRes.ok) throw new Error('Falha ao consultar geocoding');
-        const geoData = await geoRes.json();
-
-        if (!geoData.results || geoData.results.length === 0) {
-          output.textContent = `Cidade não encontrada: ${city}`;
-          return;
+        const place = geoData?.results?.[0];
+        if (!place?.latitude || !place?.longitude) {
+          throw new UserVisibleError(`Cidade não encontrada: ${city}`);
         }
 
-        const place = geoData.results[0];
-        const { latitude, longitude, name, country } = place;
+        const { latitude, longitude, name, country, admin1 } = place;
 
-        // 2) Previsão: obter temperatura atual
-        const weatherUrl = new URL('https://api.open-meteo.com/v1/forecast');
-        weatherUrl.searchParams.set('latitude', String(latitude));
-        weatherUrl.searchParams.set('longitude', String(longitude));
-        weatherUrl.searchParams.set('current_weather', 'true');
-        weatherUrl.searchParams.set('timezone', 'auto');
-
-        const weatherRes = await fetch(weatherUrl);
-        if (!weatherRes.ok) throw new Error('Falha ao consultar clima');
-        const weatherData = await weatherRes.json();
+        // 2) Previsão atual
+        const weatherUrl = buildWeatherUrl({ latitude, longitude });
+        const weatherData = await fetchJsonWithTimeout(weatherUrl);
 
         const temp = weatherData?.current_weather?.temperature;
-        if (typeof temp !== 'number') {
-          output.textContent = 'Não foi possível obter a temperatura.';
-          return;
+        if (typeof temp !== 'number' || Number.isNaN(temp)) {
+          throw new UserVisibleError('Não foi possível obter a temperatura.');
         }
 
-        const cityLabel = [name, country].filter(Boolean).join(', ');
-        const message = `Temperatura atual em ${cityLabel}: ${temp} °C`;
-        output.textContent = message;
+        const cityLabel = [name, admin1, country].filter(Boolean).join(', ');
+        const message = `Temperatura atual em ${cityLabel}: ${tempFormat.format(temp)} °C`;
+        safeUpdate(message);
         console.log(message);
       } catch (err) {
-        console.error(err);
-        output.textContent = 'Ocorreu um erro ao buscar a temperatura. Verifique sua conexão e tente novamente.';
+        // Mensagens diferentes por tipo de erro
+        if (err.name === 'AbortError') {
+          safeUpdate('Tempo de resposta excedido. Tente novamente.');
+        } else if (err instanceof UserVisibleError) {
+          safeUpdate(err.message);
+        } else if (err instanceof HttpError) {
+          safeUpdate(`Falha ao consultar a API (HTTP ${err.status}). Tente novamente.`);
+          console.error('[HTTP]', err);
+        } else {
+          safeUpdate('Ocorreu um erro ao buscar a temperatura. Verifique sua conexão e tente novamente.');
+          console.error('[Erro inesperado]', err);
+        }
+      } finally {
+        // Reabilita UI, mesmo em caminhos com erro
+        if (requestId === activeRequestId) {
+          setLoading(false);
+        }
       }
     });
   </script>
 </body>
+
 </html>
