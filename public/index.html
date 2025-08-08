@@ -4,50 +4,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../styles/main.css">
   <title>Clima - Script simples (Open-Meteo)</title>
-  <style>
-    :root {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    }
-
-    body {
-      margin: 2rem;
-    }
-
-    h1 {
-      font-weight: 600;
-      font-size: 1.25rem;
-    }
-
-    form {
-      display: flex;
-      gap: .5rem;
-      max-width: 560px;
-      margin-top: 1rem;
-    }
-
-    input {
-      flex: 1;
-      padding: .6rem .8rem;
-      font-size: 1rem;
-    }
-
-    button {
-      padding: .6rem .9rem;
-      font-size: 1rem;
-      cursor: pointer;
-    }
-
-    #output {
-      margin-top: 1rem;
-      font-size: 1.1rem;
-    }
-
-    .muted {
-      color: #666;
-      font-size: .95rem;
-    }
-  </style>
 </head>
 
 <body>
@@ -177,6 +135,7 @@
     // Helpers de UI
     function setLoading(loading) {
       submitBtn.disabled = loading;
+
       form.setAttribute('aria-busy', String(loading));
       if (loading) output.textContent = 'Buscando...';
     }
@@ -191,6 +150,8 @@
 
       const requestId = ++activeRequestId;
       setLoading(true);
+      output.classList.remove('status--error', 'status--success');
+      output.classList.add('status--loading');
 
       const safeUpdate = (text) => {
         // Evita que uma resposta antiga sobrescreva a UI após nova submissão
@@ -206,6 +167,9 @@
 
         const place = geoData?.results?.[0];
         if (!place?.latitude || !place?.longitude) {
+          output.classList.remove('status--loading', 'status--success');
+          output.classList.add('status--error');
+
           throw new UserVisibleError(`Cidade não encontrada: ${city}`);
         }
 
@@ -217,15 +181,23 @@
 
         const temp = weatherData?.current_weather?.temperature;
         if (typeof temp !== 'number' || Number.isNaN(temp)) {
+          output.classList.remove('status--loading', 'status--success');
+          output.classList.add('status--error');
+
           throw new UserVisibleError('Não foi possível obter a temperatura.');
         }
 
         const cityLabel = [name, admin1, country].filter(Boolean).join(', ');
+        output.classList.remove('status--loading', 'status--error');
+        output.classList.add('status--success');
         const message = `Temperatura atual em ${cityLabel}: ${tempFormat.format(temp)} °C`;
         safeUpdate(message);
         console.log(message);
       } catch (err) {
+        output.classList.remove('status--loading');
+        output.classList.add('status--error');
         // Mensagens diferentes por tipo de erro
+        
         if (err.name === 'AbortError') {
           safeUpdate('Tempo de resposta excedido. Tente novamente.');
         } else if (err instanceof UserVisibleError) {
