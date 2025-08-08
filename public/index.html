@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clima - Script simples (Open-Meteo)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 2rem; }
+    h1 { font-weight: 600; font-size: 1.25rem; }
+    form { display: flex; gap: .5rem; max-width: 560px; margin-top: 1rem; }
+    input { flex: 1; padding: .6rem .8rem; font-size: 1rem; }
+    button { padding: .6rem .9rem; font-size: 1rem; cursor: pointer; }
+    #output { margin-top: 1rem; font-size: 1.1rem; }
+    .muted { color: #666; font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <h1>Temperatura por cidade (Open‑Meteo)</h1>
+  <p class="muted">Digite uma cidade e veja a temperatura atual. Também é impresso no console do navegador.</p>
+
+  <form id="search-form">
+    <input id="city-input" type="text" placeholder="Digite o nome da cidade" aria-label="Cidade" required />
+    <button type="submit">Buscar</button>
+  </form>
+
+  <div id="output" role="status"></div>
+
+  <script>
+    const form = document.getElementById('search-form');
+    const input = document.getElementById('city-input');
+    const output = document.getElementById('output');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const city = input.value.trim();
+      if (!city) {
+        output.textContent = 'Digite o nome de uma cidade.';
+        return;
+      }
+
+      output.textContent = 'Buscando...';
+
+      try {
+        // 1) Geocoding: obter latitude/longitude a partir do nome da cidade
+        const geoUrl = new URL('https://geocoding-api.open-meteo.com/v1/search');
+        geoUrl.searchParams.set('name', city);
+        geoUrl.searchParams.set('count', '1');
+        geoUrl.searchParams.set('language', 'pt');
+        geoUrl.searchParams.set('format', 'json');
+
+        const geoRes = await fetch(geoUrl);
+        if (!geoRes.ok) throw new Error('Falha ao consultar geocoding');
+        const geoData = await geoRes.json();
+
+        if (!geoData.results || geoData.results.length === 0) {
+          output.textContent = `Cidade não encontrada: ${city}`;
+          return;
+        }
+
+        const place = geoData.results[0];
+        const { latitude, longitude, name, country } = place;
+
+        // 2) Previsão: obter temperatura atual
+        const weatherUrl = new URL('https://api.open-meteo.com/v1/forecast');
+        weatherUrl.searchParams.set('latitude', String(latitude));
+        weatherUrl.searchParams.set('longitude', String(longitude));
+        weatherUrl.searchParams.set('current_weather', 'true');
+        weatherUrl.searchParams.set('timezone', 'auto');
+
+        const weatherRes = await fetch(weatherUrl);
+        if (!weatherRes.ok) throw new Error('Falha ao consultar clima');
+        const weatherData = await weatherRes.json();
+
+        const temp = weatherData?.current_weather?.temperature;
+        if (typeof temp !== 'number') {
+          output.textContent = 'Não foi possível obter a temperatura.';
+          return;
+        }
+
+        const cityLabel = [name, country].filter(Boolean).join(', ');
+        const message = `Temperatura atual em ${cityLabel}: ${temp} °C`;
+        output.textContent = message;
+        console.log(message);
+      } catch (err) {
+        console.error(err);
+        output.textContent = 'Ocorreu um erro ao buscar a temperatura. Verifique sua conexão e tente novamente.';
+      }
+    });
+  </script>
+</body>
+</html>
